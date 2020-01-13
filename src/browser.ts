@@ -1,44 +1,26 @@
 // Copyright (c) Jupyter Development Team.
 // Distributed under the terms of the Modified BSD License.
 
-import {
-  find
-} from '@phosphor/algorithm';
+import { ToolbarButton } from '@jupyterlab/apputils';
 
-import {
-  PanelLayout, Widget
-} from '@phosphor/widgets';
+import { URLExt } from '@jupyterlab/coreutils';
 
-import {
-  ToolbarButton
-} from '@jupyterlab/apputils';
+import { FileBrowser } from '@jupyterlab/filebrowser';
 
-import {
-  URLExt
-} from '@jupyterlab/coreutils';
+import { find } from '@phosphor/algorithm';
 
-import {
-  FileBrowser
-} from '@jupyterlab/filebrowser';
+import { Message } from '@phosphor/messaging';
 
-import {
-  ObservableValue
-} from '@jupyterlab/observables';
+import { ISignal, Signal } from '@phosphor/signaling';
 
-import {
-  GitHubDrive, parsePath
-} from './contents';
+import { PanelLayout, Widget } from '@phosphor/widgets';
 
+import { GitHubDrive, parsePath } from './contents';
 
 /**
  * The base url for a mybinder deployment.
  */
 const MY_BINDER_BASE_URL = 'https://mybinder.org/v2/gh';
-
-/**
- * The GitHub base url.
- */
-const GITHUB_BASE_URL = 'https://github.com';
 
 /**
  * The className for disabling the mybinder button.
@@ -48,8 +30,7 @@ const MY_BINDER_DISABLED = 'jp-MyBinderButton-disabled';
 /**
  * Widget for hosting the GitHub filebrowser.
  */
-export
-class GitHubFileBrowser extends Widget {
+export class GitHubFileBrowser extends Widget {
   constructor(browser: FileBrowser, drive: GitHubDrive) {
     super();
     this.addClass('jp-GitHubBrowser');
@@ -59,35 +40,43 @@ class GitHubFileBrowser extends Widget {
     this._drive = drive;
 
     // Create an editable name for the user/org name.
-    this.userName = new GitHubEditableName('', '<Edit User>');
-    this.userName.addClass('jp-GitHubEditableUserName');
+    this.userName = new GitHubUserInput();
     this.userName.node.title = 'Click to edit user/organization';
     this._browser.toolbar.addItem('user', this.userName);
-    this.userName.name.changed.connect(this._onUserChanged, this);
-
+    this.userName.nameChanged.connect(
+      this._onUserChanged,
+      this
+    );
     // Create a button that opens GitHub at the appropriate
     // repo+directory.
     this._openGitHubButton = new ToolbarButton({
       onClick: () => {
-        let url = GITHUB_BASE_URL;
+        let url = this._drive.baseUrl;
         // If there is no valid user, open the GitHub homepage.
         if (!this._drive.validUser) {
           window.open(url);
           return;
         }
-        const localPath = this._browser.model.manager.services.contents
-          .localPath(this._browser.model.path);
+        const localPath = this._browser.model.manager.services.contents.localPath(
+          this._browser.model.path
+        );
         const resource = parsePath(localPath);
         url = URLExt.join(url, resource.user);
         if (resource.repository) {
-          url = URLExt.join(url, resource.repository,
-                            'tree', 'master', resource.path);
+          url = URLExt.join(
+            url,
+            resource.repository,
+            'tree',
+            'master',
+            resource.path
+          );
         }
         window.open(url);
       },
-      className: 'jp-GitHubIcon',
+      iconClassName: 'jp-GitHub-icon jp-Icon jp-Icon-16',
       tooltip: 'Open this repository on GitHub'
     });
+    this._openGitHubButton.addClass('jp-GitHub-toolbar-item');
     this._browser.toolbar.addItem('GitHub', this._openGitHubButton);
 
     // Create a button the opens MyBinder to the appropriate repo.
@@ -97,42 +86,66 @@ class GitHubFileBrowser extends Widget {
         if (!this._binderActive) {
           return;
         }
-        const localPath = this._browser.model.manager.services.contents
-          .localPath(this._browser.model.path);
+        const localPath = this._browser.model.manager.services.contents.localPath(
+          this._browser.model.path
+        );
         const resource = parsePath(localPath);
-        const url = URLExt.join(MY_BINDER_BASE_URL, resource.user,
-                                resource.repository, 'master');
+        const url = URLExt.join(
+          MY_BINDER_BASE_URL,
+          resource.user,
+          resource.repository,
+          'master'
+        );
         // Attempt to open using the JupyterLab tree handler
         const tree = URLExt.join('lab', 'tree', resource.path);
         window.open(url + `?urlpath=${tree}`);
       },
       tooltip: 'Launch this repository on mybinder.org',
-      className: 'jp-MyBinderButton'
+      iconClassName: 'jp-MyBinderButton jp-Icon jp-Icon-16'
     });
+    this._launchBinderButton.addClass('jp-GitHub-toolbar-item');
     this._browser.toolbar.addItem('binder', this._launchBinderButton);
 
+    // Add our own refresh button, since the other one is hidden
+    // via CSS.
+    let refresher = new ToolbarButton({
+      iconClassName: 'jp-RefreshIcon jp-Icon jp-Icon-16',
+      onClick: () => {
+        this._browser.model.refresh();
+      },
+      tooltip: 'Refresh File List'
+    });
+    refresher.addClass('jp-GitHub-toolbar-item');
+    this._browser.toolbar.addItem('gh-refresher', refresher);
+
     // Set up a listener to check if we can launch mybinder.
-    this._browser.model.pathChanged.connect(this._onPathChanged, this);
+    this._browser.model.pathChanged.connect(
+      this._onPathChanged,
+      this
+    );
     // Trigger an initial pathChanged to check for binder state.
     this._onPathChanged();
 
-    this._drive.rateLimitedState.changed.connect(this._updateErrorPanel, this);
+    this._drive.rateLimitedState.changed.connect(
+      this._updateErrorPanel,
+      this
+    );
   }
 
   /**
    * An editable widget hosting the current user name.
    */
-  readonly userName: GitHubEditableName;
+  readonly userName: GitHubUserInput;
 
   /**
    * React to a change in user.
    */
-  private _onUserChanged(sender: ObservableValue, args: ObservableValue.IChangedArgs) {
+  private _onUserChanged() {
     if (this._changeGuard) {
       return;
     }
     this._changeGuard = true;
-    this._browser.model.cd(`/${args.newValue as string}`).then(() => {
+    this._browser.model.cd(`/${this.userName.name}`).then(() => {
       this._changeGuard = false;
       this._updateErrorPanel();
       // Once we have the new listing, maybe give the file listing
@@ -150,14 +163,15 @@ class GitHubFileBrowser extends Widget {
    * React to the path changing for the browser.
    */
   private _onPathChanged(): void {
-    const localPath = this._browser.model.manager.services.contents
-      .localPath(this._browser.model.path);
+    const localPath = this._browser.model.manager.services.contents.localPath(
+      this._browser.model.path
+    );
     const resource = parsePath(localPath);
 
     // If we are not already changing the user name, set it.
     if (!this._changeGuard) {
       this._changeGuard = true;
-      this.userName.name.set(resource.user);
+      this.userName.name = resource.user;
       this._changeGuard = false;
       this._updateErrorPanel();
     }
@@ -181,10 +195,14 @@ class GitHubFileBrowser extends Widget {
     // Figure out some way around this.
     if (resource.path === '') {
       const item = find(this._browser.model.items(), i => {
-        return i.name === 'requirements.txt' || i.name === 'environment.yml' ||
-               i.name === 'apt.txt' || i.name === 'REQUIRE' ||
-               i.name === 'Dockerfile' ||
-               (i.name === 'binder' && i.type === 'directory');
+        return (
+          i.name === 'requirements.txt' ||
+          i.name === 'environment.yml' ||
+          i.name === 'apt.txt' ||
+          i.name === 'REQUIRE' ||
+          i.name === 'Dockerfile' ||
+          (i.name === 'binder' && i.type === 'directory')
+        );
       });
       if (item) {
         this._launchBinderButton.removeClass(MY_BINDER_DISABLED);
@@ -205,8 +223,9 @@ class GitHubFileBrowser extends Widget {
    * React to a change in the validity of the drive.
    */
   private _updateErrorPanel(): void {
-    const localPath = this._browser.model.manager.services.contents
-      .localPath(this._browser.model.path);
+    const localPath = this._browser.model.manager.services.contents.localPath(
+      this._browser.model.path
+    );
     const resource = parsePath(localPath);
     const rateLimited = this._drive.rateLimitedState.get();
     const validUser = this._drive.validUser;
@@ -223,8 +242,9 @@ class GitHubFileBrowser extends Widget {
     if (rateLimited) {
       this._errorPanel = new GitHubErrorPanel(
         'You have been rate limited by GitHub! ' +
-        'You will need to wait about an hour before ' +
-        'continuing');
+          'You will need to wait about an hour before ' +
+          'continuing'
+      );
       const listing = (this._browser.layout as PanelLayout).widgets[2];
       listing.node.appendChild(this._errorPanel.node);
       return;
@@ -232,9 +252,9 @@ class GitHubFileBrowser extends Widget {
 
     // If we have an invalid user, make an error panel.
     if (!validUser) {
-      const message = resource.user ?
-        `"${resource.user}" appears to be an invalid user name!` :
-        'Please enter a GitHub user name';
+      const message = resource.user
+        ? `"${resource.user}" appears to be an invalid user name!`
+        : 'Please enter a GitHub user name';
       this._errorPanel = new GitHubErrorPanel(message);
       const listing = (this._browser.layout as PanelLayout).widgets[2];
       listing.node.appendChild(this._errorPanel.node);
@@ -256,53 +276,109 @@ class GitHubFileBrowser extends Widget {
  * used to host the currently active GitHub
  * user name.
  */
-export
-class GitHubEditableName extends Widget {
-  constructor(initialName: string = '', placeholder?: string) {
+export class GitHubUserInput extends Widget {
+  constructor() {
     super();
-    this.addClass('jp-GitHubEditableName');
-    this._nameNode = document.createElement('div');
-    this._nameNode.className = 'jp-GitHubEditableName-display';
-    this._editNode = document.createElement('input');
-    this._editNode.className = 'jp-GitHubEditableName-input';
-
-    this._placeholder = placeholder || '<Edit Name>';
-
-    this.node.appendChild(this._nameNode);
-    this.name = new ObservableValue(initialName);
-    this._nameNode.textContent = initialName || this._placeholder;
-
-    this.node.onclick = () => {
-      if (this._pending) {
-        return;
-      }
-      this._pending = true;
-      Private.changeField(this._nameNode, this._editNode).then(value => {
-        this._pending = false;
-        if (this.name.get() !== value) {
-          this.name.set(value);
-        }
-      });
-    };
-
-    this.name.changed.connect((s, args) => {
-      if (args.oldValue !== args.newValue) {
-        this._nameNode.textContent =
-          args.newValue as string || this._placeholder;
-      }
-    });
+    this.addClass('jp-GitHubUserInput');
+    const layout = (this.layout = new PanelLayout());
+    const wrapper = new Widget();
+    wrapper.addClass('jp-GitHubUserInput-wrapper');
+    this._input = document.createElement('input');
+    this._input.placeholder = 'GitHub User';
+    this._input.className = 'jp-GitHubUserInput-input';
+    wrapper.node.appendChild(this._input);
+    layout.addWidget(wrapper);
   }
 
   /**
    * The current name of the field.
    */
-  readonly name: ObservableValue;
+  get name(): string {
+    return this._name;
+  }
+  set name(value: string) {
+    if (value === this._name) {
+      return;
+    }
+    const old = this._name;
+    this._name = value;
+    this._input.value = value;
+    this._nameChanged.emit({
+      oldValue: old,
+      newValue: value
+    });
+  }
 
+  /**
+   * A signal for when the name changes.
+   */
+  get nameChanged(): ISignal<this, { newValue: string; oldValue: string }> {
+    return this._nameChanged;
+  }
 
-  private _pending  = false;
-  private _placeholder: string;
-  private _nameNode: HTMLElement;
-  private _editNode: HTMLInputElement;
+  /**
+   * Handle the DOM events for the widget.
+   *
+   * @param event - The DOM event sent to the widget.
+   *
+   * #### Notes
+   * This method implements the DOM `EventListener` interface and is
+   * called in response to events on the main area widget's node. It should
+   * not be called directly by user code.
+   */
+  handleEvent(event: KeyboardEvent): void {
+    switch (event.type) {
+      case 'keydown':
+        switch (event.keyCode) {
+          case 13: // Enter
+            event.stopPropagation();
+            event.preventDefault();
+            this.name = this._input.value;
+            this._input.blur();
+            break;
+          default:
+            break;
+        }
+        break;
+      case 'blur':
+        event.stopPropagation();
+        event.preventDefault();
+        this.name = this._input.value;
+        break;
+      case 'focus':
+        event.stopPropagation();
+        event.preventDefault();
+        this._input.select();
+        break;
+      default:
+        break;
+    }
+  }
+
+  /**
+   * Handle `after-attach` messages for the widget.
+   */
+  protected onAfterAttach(msg: Message): void {
+    this._input.addEventListener('keydown', this);
+    this._input.addEventListener('blur', this);
+    this._input.addEventListener('focus', this);
+  }
+
+  /**
+   * Handle `before-detach` messages for the widget.
+   */
+  protected onBeforeDetach(msg: Message): void {
+    this._input.removeEventListener('keydown', this);
+    this._input.removeEventListener('blur', this);
+    this._input.removeEventListener('focus', this);
+  }
+
+  private _name = '';
+  private _nameChanged = new Signal<
+    this,
+    { newValue: string; oldValue: string }
+  >(this);
+  private _input: HTMLInputElement;
 }
 
 /**
@@ -310,8 +386,7 @@ class GitHubEditableName extends Widget {
  * used if there is an invalid user name or if we
  * are being rate-limited.
  */
-export
-class GitHubErrorPanel extends Widget {
+export class GitHubErrorPanel extends Widget {
   constructor(message: string) {
     super();
     this.addClass('jp-GitHubErrorPanel');
@@ -322,68 +397,5 @@ class GitHubErrorPanel extends Widget {
     text.textContent = message;
     this.node.appendChild(image);
     this.node.appendChild(text);
-  }
-}
-
-
-/**
- * A module-Private namespace.
- */
-namespace Private {
-  export
-  /**
-   * Given a text node and an input element, replace the text
-   * node wiht the input element, allowing the user to reset the
-   * value of the text node.
-   *
-   * @param text - The node to make editable.
-   *
-   * @param edit - The input element to replace it with.
-   *
-   * @returns a Promise that resolves when the editing is complete,
-   *   or has been canceled.
-   */
-  function changeField(text: HTMLElement, edit: HTMLInputElement): Promise<string> {
-    // Replace the text node with an the input element.
-    let parent = text.parentElement as HTMLElement;
-    let initialValue = text.textContent || '';
-    edit.value = initialValue;
-    parent.replaceChild(edit, text);
-    edit.focus();
-
-    // Highlight the input element
-    let index = edit.value.lastIndexOf('.');
-    if (index === -1) {
-      edit.setSelectionRange(0, edit.value.length);
-    } else {
-      edit.setSelectionRange(0, index);
-    }
-
-    return new Promise<string>((resolve, reject) => {
-      edit.onblur = () => {
-        // Set the text content of the original node, then
-        // replace the node.
-        parent.replaceChild(text, edit);
-        text.textContent = edit.value || initialValue;
-        resolve(edit.value);
-      };
-      edit.onkeydown = (event: KeyboardEvent) => {
-        switch (event.keyCode) {
-        case 13:  // Enter
-          event.stopPropagation();
-          event.preventDefault();
-          edit.blur();
-          break;
-        case 27:  // Escape
-          event.stopPropagation();
-          event.preventDefault();
-          edit.value = initialValue;
-          edit.blur();
-          break;
-        default:
-          break;
-        }
-      };
-    });
   }
 }
